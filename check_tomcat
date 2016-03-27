@@ -1,0 +1,631 @@
+#!/bin/bash
+
+################################################################################
+#
+# Author:      Joaquín José García Cañas
+# Description: Script to monitor Apache Tomcat through JMX Proxy Servlet
+#
+# History:
+#    26/02/2016 - v1.0.0 - Initial version
+#    02/03/2016 - v1.1.0 - Performance improvement
+#    09/03/2016 - v1.2.0 - Error handling
+#    23/03/2016 - v1.3.0 - Minor bug fixes and enhancements
+#
+################################################################################
+
+
+################################################################################
+# Functions
+################################################################################
+
+function activate_debug()
+{
+	set -x
+}
+
+function check_instance_apps()
+{
+	set_instance_data "Catalina:type=Manager,*" "act"
+	
+	if [[ "$(is_data_valid)" -eq "1" ]]
+	then
+		while read ITEM
+		do
+			set_instance_data_cur "${ITEM}" "activeSessions"
+			set_instance_data_obj "${ITEM}" "path=|text="
+			
+			if [[ "$(is_service_status "critical")" -eq "1" ]]
+			then
+				set_exit "2" "" "name: $(get_instance_data_obj)\nstatus: $(convert_stat "2") [$(get_instance_data_cur)]"
+			elif [[ "$(is_service_status "warning")" -eq "1" ]]
+			then
+				set_exit "1" "" "name: $(get_instance_data_obj)\nstatus: $(convert_stat "1") [$(get_instance_data_cur)]"
+			else
+				set_exit "0"
+			fi
+		done < <(list_items)
+		
+		set_exit_head "$(get_count)"
+	else
+		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
+	fi
+}
+
+function check_instance_memory()
+{
+	set_instance_data "java.lang:type=Memory" "Heap|NonH"
+	
+	if [[ "$(is_data_valid)" -eq "1" ]]
+	then
+		set_instance_data_cur "" "HeapMemoryUsage" "used="
+		set_instance_data_max "" "HeapMemoryUsage" "max="
+		set_instance_data_pct
+		
+		if [[ "$(is_service_status "critical")" -eq "1" ]]
+		then
+			set_exit "2"
+		elif [[ "$(is_service_status "warning")" -eq "1" ]]
+		then
+			set_exit "1"
+		else
+			set_exit "0"
+		fi
+		
+		set_exit_head "HeapMemoryUsage=$(get_instance_data_pct)%"
+		set_exit_perf "HeapMemoryUsage=$(get_instance_data_pct)%;0;0;0;100"
+		
+		set_instance_data_cur "" "NonHeapMemoryUsage" "used="
+		set_instance_data_max "" "NonHeapMemoryUsage" "max="
+		set_instance_data_pct
+		
+		if [[ "$(is_service_status "critical")" -eq "1" ]]
+		then
+			set_exit "2"
+		elif [[ "$(is_service_status "warning")" -eq "1" ]]
+		then
+			set_exit "1"
+		else
+			set_exit "0"
+		fi
+		
+		set_exit_head "NonHeapMemoryUsage=$(get_instance_data_pct)%"
+		set_exit_perf "NonHeapMemoryUsage=$(get_instance_data_pct)%;0;0;0;100"
+	else
+		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
+	fi
+}
+
+function check_instance_pools()
+{
+	set_instance_data "Catalina:type=DataSource,*" "maxA|numA"
+	
+	if [[ "$(is_data_valid)" -eq "1" ]]
+	then
+		while read ITEM
+		do
+			set_instance_data_cur "${ITEM}" "numActive"
+			set_instance_data_max "${ITEM}" "maxActive"
+			set_instance_data_obj "${ITEM}" "name="
+			set_instance_data_pct
+			
+			if [[ "$(is_service_status "critical")" -eq "1" ]]
+			then
+				set_exit "2" "" "name: $(get_instance_data_obj)\nstatus: $(convert_stat "2") [$(get_instance_data_cur)/$(get_instance_data_max)]"
+			elif [[ "$(is_service_status "warning")" -eq "1" ]]
+			then
+				set_exit "1" "" "name: $(get_instance_data_obj)\nstatus: $(convert_stat "1") [$(get_instance_data_cur)/$(get_instance_data_max)]"
+			else
+				set_exit "0"
+			fi
+		done < <(list_items)
+		
+		set_exit_head "$(get_count)"
+	else
+		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
+	fi
+}
+
+function check_instance_threads()
+{
+	set_instance_data "Catalina:type=ThreadPool,*" "currentThreadsB|maxT"
+	
+	if [[ "$(is_data_valid)" -eq "1" ]]
+	then
+		while read ITEM
+		do
+			set_instance_data_cur "${ITEM}" "currentThreadsBusy"
+			set_instance_data_max "${ITEM}" "maxThreads"
+			set_instance_data_obj "${ITEM}" "name="
+			set_instance_data_pct
+			
+			if [[ "$(is_service_status "critical")" -eq "1" ]]
+			then
+				set_exit "2"
+			elif [[ "$(is_service_status "warning")" -eq "1" ]]
+			then
+				set_exit "1"
+			else
+				set_exit "0"
+			fi
+			
+			set_exit_head "ThreadsBusy['$(get_instance_data_obj)']=$(get_instance_data_cur)/$(get_instance_data_max)"
+			set_exit_perf "ThreadsBusy['$(get_instance_data_obj)']=$(get_instance_data_cur);0;0;0;$(get_instance_data_max)"
+		done < <(list_items)
+	else
+		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
+	fi
+}
+
+function convert_stat()
+{
+	case "${1}" in
+		"0")
+			echo "OK"
+			;;
+		"1")
+			echo "WARNING"
+			;;
+		"2")
+			echo "CRITICAL"
+			;;
+		"3")
+			echo "UNKNOWN"
+			;;
+	esac
+}
+
+function execute_query()
+{
+	curl -s --connect-timeout 5 --max-time 5 -u "$(get_instance_auth)" "http://$(get_instance_conn)/manager/jmxproxy/?qry=${1}" | sed -r 's/[\r"]//g; s/\//_/g; /^(Name|'"${2}"'|$)/!d'
+}
+
+function get_count()
+{
+	echo "OK=$(get_count_ok) WARNING=$(get_count_warn) CRITICAL=$(get_count_crit)"
+}
+
+function get_count_crit()
+{
+	echo "${COUNT_CRIT:-0}"
+}
+
+function get_count_ok()
+{
+	echo "${COUNT_OK:-0}"
+}
+
+function get_count_warn()
+{
+	echo "${COUNT_WARN:-0}"
+}
+
+function get_exit()
+{
+	if [[ "$(get_exit_head)" != "error" ]]
+	then
+		echo -e "$(convert_stat "$(get_exit_stat)") - $(get_service_check): $(get_exit_head) | $(get_exit_perf)\n$(get_exit_body)"
+	else
+		echo -e "$(convert_stat "$(get_exit_stat)") - $(get_exit_head): $(get_exit_body)"
+	fi
+}
+
+function get_exit_body()
+{
+	echo "${EXIT_BODY}"
+}
+
+function get_exit_head()
+{
+	echo "${EXIT_HEAD:-error}"
+}
+
+function get_exit_perf()
+{
+	echo "${EXIT_PERF:-null}"
+}
+
+function get_exit_stat()
+{
+	echo "${EXIT_STAT:-3}"
+}
+
+function get_help()
+{
+	echo "${HELP}"
+}
+
+function get_instance_auth()
+{
+	echo "$(get_instance_auth_user):$(get_instance_auth_pass)"
+}
+
+function get_instance_auth_pass()
+{
+	echo "${INSTANCE_AUTH_PASS}"
+}
+
+function get_instance_auth_user()
+{
+	echo "${INSTANCE_AUTH_USER}"
+}
+
+function get_instance_base()
+{
+	echo "${INSTANCE_BASE}"
+}
+
+function get_instance_conn()
+{
+	echo "$(get_instance_conn_addr):$(get_instance_conn_port)"
+}
+
+function get_instance_conn_addr()
+{
+	echo "${INSTANCE_CONN_ADDR:-localhost}"
+}
+
+function get_instance_conn_port()
+{
+	echo "${INSTANCE_CONN_PORT:-8080}"
+}
+
+function get_instance_data()
+{
+	echo "${INSTANCE_DATA}"
+}
+
+function get_instance_data_cur()
+{
+	echo "${INSTANCE_DATA_CUR}"
+}
+
+function get_instance_data_max()
+{
+	echo "${INSTANCE_DATA_MAX}"
+}
+
+function get_instance_data_obj()
+{
+	echo "${INSTANCE_DATA_OBJ}"
+}
+
+function get_instance_data_pct()
+{
+	echo "${INSTANCE_DATA_PCT}"
+}
+
+function get_instance_name()
+{
+	echo "${INSTANCE_NAME}"
+}
+
+function get_instance_proc()
+{
+	echo "${INSTANCE_PROC}"
+}
+
+function get_service_check()
+{
+	echo "${SERVICE_CHECK}"
+}
+
+function get_service_critical()
+{
+	echo "${SERVICE_CRITICAL:-90}"
+}
+
+function get_service_warning()
+{
+	echo "${SERVICE_WARNING:-75}"
+}
+
+function is_auth_valid()
+{
+	[[ "$(get_instance_auth)" =~ ^[^:]+:[^:]+$ ]] && echo "1" || echo "0"
+}
+
+function is_check_valid()
+{
+	[[ "$(get_service_check)" =~ ^(apps|memory|pools|threads)$ ]] && echo "1" || echo "0"
+}
+
+function is_data_valid()
+{
+	[[ -n "$(get_instance_data)" ]] && echo "1" || echo "0"
+}
+
+function is_help_required()
+{
+	[[ -n "$(get_help)" ]] && echo "1" || echo "0"
+}
+
+function is_instance_alive()
+{
+	[[ -n "$(get_instance_proc)" ]] && echo "1" || echo "0"
+}
+
+function is_instance_valid()
+{
+	[[ -n "$(get_instance_name)" ]] && echo "1" || echo "0"
+}
+
+function is_service_status()
+{
+	if [[ "$(get_service_check)" != "apps" ]]
+	then
+		[[ "$(get_instance_data_pct)" -le "$(get_service_"${1}")" ]]
+	else
+		[[ "$(get_instance_data_cur)" -le "$(get_service_"${1}")" ]]
+	fi
+	
+	echo "${?}"
+}
+
+function list_items()
+{
+	get_instance_data | sed -r '/^Name:/!d'
+}
+
+function parse_args()
+{
+	while [[ -n "${1}" ]]
+	do
+		case "${1}" in
+			"-n"|"--name")
+				set_instance_name "${2}"
+				shift
+				;;
+			"-k"|"--check")
+				set_service_check "${2}"
+				shift
+				;;
+			"-w"|"--warning")
+				set_service_warning "${2}"
+				shift
+				;;
+			"-c"|"--critical")
+				set_service_critical "${2}"
+				shift
+				;;
+			"-v"|"--verbose")
+				activate_debug
+				;;
+			"-h"|"--help")
+				set_help
+				;;
+		esac
+		
+		shift
+	done
+}
+
+function parse_data()
+{
+	get_instance_data | sed -r '/^'"${1}"'$/,/^$/!d; /^'"${2}"':/!d; s/^.*('"${3:-:}"')\ ?([^,}]+).*$/\2/'
+}
+
+function parse_xml()
+{
+	echo "cat //${1}" | xmllint --shell "${2}" | sed -r -n '/=/!d; s/^.*="([^"]+)"$/\1/p; q'
+}
+
+function set_count()
+{
+	case "${1}" in
+		"0")
+			set_count_ok
+			;;
+		"1")
+			set_count_warn
+			;;
+		"2")
+			set_count_crit
+			;;
+	esac
+}
+
+function set_count_crit()
+{
+	COUNT_CRIT="$(( COUNT_CRIT += 1 ))"
+}
+
+function set_count_ok()
+{
+	COUNT_OK="$(( COUNT_OK += 1 ))"
+}
+
+function set_count_warn()
+{
+	COUNT_WARN="$(( COUNT_WARN += 1 ))"
+}
+
+function set_exit()
+{
+	set_count "${1}"
+	set_exit_stat "${1}"
+	[[ -n "${2}" ]] && set_exit_head "${2}"
+	[[ -n "${3}" ]] && set_exit_body "${3}"
+}
+
+function set_exit_body()
+{
+	[[ -n "${EXIT_BODY}" ]] && EXIT_BODY+="\n${1}" || EXIT_BODY="${1}"
+}
+
+function set_exit_head()
+{
+	[[ -n "${EXIT_HEAD}" ]] && EXIT_HEAD+=" ${1}" || EXIT_HEAD="${1}"
+}
+
+function set_exit_perf()
+{
+	[[ -n "${EXIT_PERF}" ]] && EXIT_PERF+=" ${1}" || EXIT_PERF="${1}"
+}
+
+function set_exit_stat()
+{
+	[[ -z "${EXIT_STAT}" || "${EXIT_STAT}" -lt "${1}" ]] && EXIT_STAT="${1}"
+}
+
+function set_help()
+{
+	HELP="$(echo -e \
+			"Usage: ${BASH_SOURCE[0]} [-h] [-v] -n instance_name -k service_check [-w service_warning] [-c service_critical]" \
+			"\n" \
+			"\n  -c, --critical" \
+			"\n    Specifies the 'critical' level check. If the service check is 'apps' the value is treated as" \
+			"\n    a literal number, in any other case is treated as a percent. Default value is 90." \
+			"\n" \
+			"\n  -h, --help" \
+			"\n    Shows this help message." \
+			"\n" \
+			"\n  -k, --check" \
+			"\n    Specifies the service check. Accepted values are: apps, memory, pools and threads." \
+			"\n" \
+			"\n  -n, --name" \
+			"\n    Specifies the instance name." \
+			"\n" \
+			"\n  -v, --verbose" \
+			"\n    Enable verbose logging of what check_tomcat is doing." \
+			"\n" \
+			"\n  -w, --warning" \
+			"\n    Specifies the 'warning' level check. If the service check is 'apps' the value is treated as" \
+			"\n    a literal number, in any other case is treated as a percent. Default value is 75." \
+			"\n" \
+			"\nExample: ${BASH_SOURCE[0]} -n tomcat -k memory -w 75 -c 90" \
+			"\n" \
+			"\nThis example will report CRITICAL if the current JVM heap/nonheap usage exceeds 90% or WARNING" \
+			"\nif the heap/nonheap usage exceeds 75%.")"
+}
+
+function set_instance_auth()
+{
+	set_instance_auth_user
+	set_instance_auth_pass
+}
+
+function set_instance_auth_pass()
+{
+	INSTANCE_AUTH_PASS="$(parse_xml "user[contains(@roles,'manager-jmx')]/@password" "$(get_instance_base)/conf/tomcat-users.xml")"
+}
+
+function set_instance_auth_user()
+{
+	INSTANCE_AUTH_USER="$(parse_xml "user[contains(@roles,'manager-jmx')]/@username" "$(get_instance_base)/conf/tomcat-users.xml")"
+}
+
+function set_instance_base()
+{
+	INSTANCE_BASE="$(get_instance_proc | sed -r 's/^.*catalina\.base=([^ ]+).*$/\1/')"
+}
+
+function set_instance_conn()
+{
+	set_instance_conn_addr
+	set_instance_conn_port
+}
+
+function set_instance_conn_addr()
+{
+	INSTANCE_CONN_ADDR="$(parse_xml "Connector[@protocol='HTTP/1.1']/@address" "$(get_instance_base)/conf/server.xml")"
+}
+
+function set_instance_conn_port()
+{
+	INSTANCE_CONN_PORT="$(parse_xml "Connector[@protocol='HTTP/1.1']/@port" "$(get_instance_base)/conf/server.xml")"
+}
+
+function set_instance_data()
+{
+	INSTANCE_DATA="$(execute_query "${1}" "${2}")"
+}
+
+function set_instance_data_cur()
+{
+	INSTANCE_DATA_CUR="$(parse_data "${1}" "${2}" "${3}")"
+}
+
+function set_instance_data_max()
+{
+	INSTANCE_DATA_MAX="$(parse_data "${1}" "${2}" "${3}")"
+}
+
+function set_instance_data_obj()
+{
+	INSTANCE_DATA_OBJ="$(parse_data "${1}" "Name" "${2}")"
+}
+
+function set_instance_data_pct()
+{
+	INSTANCE_DATA_PCT="$(( $(get_instance_data_cur) * 100 / $(get_instance_data_max) ))"
+}
+
+function set_instance_name()
+{
+	INSTANCE_NAME="${1}"
+}
+
+function set_instance_proc()
+{
+	INSTANCE_PROC="$(ps -C java -o cmd | grep "\/$(get_instance_name)\ ")"
+}
+
+function set_service_check()
+{
+	SERVICE_CHECK="${1}"
+}
+
+function set_service_critical()
+{
+	SERVICE_CRITICAL="${1}"
+}
+
+function set_service_warning()
+{
+	SERVICE_WARNING="${1}"
+}
+
+
+################################################################################
+# Main program
+################################################################################
+
+parse_args "${@}"
+
+if [[ "$(is_help_required)" -eq "0" ]]
+then
+	if [[ "$(is_instance_valid)" -eq "1" ]]
+	then
+		if [[ "$(is_check_valid)" -eq "1" ]]
+		then
+			set_instance_proc
+			
+			if [[ "$(is_instance_alive)" -eq "1" ]]
+			then
+				set_instance_base
+				set_instance_auth
+				
+				if [[ "$(is_auth_valid)" -eq "1" ]]
+				then
+					set_instance_conn
+					check_instance_"$(get_service_check)"
+				else
+					set_exit "2" "error" "No access to JMX proxy interface"
+				fi
+			else
+				set_exit "2" "error" "Instance is not running"
+			fi
+		else
+			set_exit "3" "error" "Invalid service check provided (try '${BASH_SOURCE[0]} --help' for more information)"
+		fi
+	else
+		set_exit "3" "error" "Invalid instance name provided (try '${BASH_SOURCE[0]} --help' for more information)"
+	fi
+	
+	get_exit
+else
+	get_help
+fi
+
+
+exit "$(get_exit_stat)"

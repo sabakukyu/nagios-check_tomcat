@@ -26,14 +26,14 @@ function activate_debug()
 function check_instance_apps()
 {
 	set_instance_data "Catalina:type=Manager,*" "act"
-	
+
 	if [[ "$(is_data_valid)" -eq "1" ]]
 	then
 		while read ITEM
 		do
 			set_instance_data_cur "${ITEM}" "activeSessions"
 			set_instance_data_obj "${ITEM}" "path=|text="
-			
+
 			if [[ "$(is_service_status "critical")" -eq "1" ]]
 			then
 				set_exit "2" "" "name: $(get_instance_data_obj)\nstatus: $(convert_stat "2") [$(get_instance_data_cur)]"
@@ -44,7 +44,7 @@ function check_instance_apps()
 				set_exit "0"
 			fi
 		done < <(list_items)
-		
+
 		set_exit_head "$(get_count)"
 	else
 		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
@@ -54,13 +54,13 @@ function check_instance_apps()
 function check_instance_memory()
 {
 	set_instance_data "java.lang:type=Memory" "Heap|NonH"
-	
+
 	if [[ "$(is_data_valid)" -eq "1" ]]
 	then
 		set_instance_data_cur "" "HeapMemoryUsage" "used="
 		set_instance_data_max "" "HeapMemoryUsage" "max="
 		set_instance_data_pct
-		
+
 		if [[ "$(is_service_status "critical")" -eq "1" ]]
 		then
 			set_exit "2"
@@ -70,14 +70,14 @@ function check_instance_memory()
 		else
 			set_exit "0"
 		fi
-		
+
 		set_exit_head "HeapMemoryUsage=$(get_instance_data_pct)%"
 		set_exit_perf "HeapMemoryUsage=$(get_instance_data_pct)%;0;0;0;100"
-		
+
 		set_instance_data_cur "" "NonHeapMemoryUsage" "used="
 		set_instance_data_max "" "NonHeapMemoryUsage" "max="
 		set_instance_data_pct
-		
+
 		if [[ "$(is_service_status "critical")" -eq "1" ]]
 		then
 			set_exit "2"
@@ -87,7 +87,7 @@ function check_instance_memory()
 		else
 			set_exit "0"
 		fi
-		
+
 		set_exit_head "NonHeapMemoryUsage=$(get_instance_data_pct)%"
 		set_exit_perf "NonHeapMemoryUsage=$(get_instance_data_pct)%;0;0;0;100"
 	else
@@ -98,7 +98,7 @@ function check_instance_memory()
 function check_instance_pools()
 {
 	set_instance_data "Catalina:type=DataSource,*" "maxA|numA"
-	
+
 	if [[ "$(is_data_valid)" -eq "1" ]]
 	then
 		while read ITEM
@@ -107,7 +107,7 @@ function check_instance_pools()
 			set_instance_data_max "${ITEM}" "maxActive"
 			set_instance_data_obj "${ITEM}" "name="
 			set_instance_data_pct
-			
+
 			if [[ "$(is_service_status "critical")" -eq "1" ]]
 			then
 				set_exit "2" "" "name: $(get_instance_data_obj)\nstatus: $(convert_stat "2") [$(get_instance_data_cur)/$(get_instance_data_max)]"
@@ -118,7 +118,7 @@ function check_instance_pools()
 				set_exit "0"
 			fi
 		done < <(list_items)
-		
+
 		set_exit_head "$(get_count)"
 	else
 		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
@@ -128,7 +128,7 @@ function check_instance_pools()
 function check_instance_threads()
 {
 	set_instance_data "Catalina:type=ThreadPool,*" "currentThreadsB|maxT"
-	
+
 	if [[ "$(is_data_valid)" -eq "1" ]]
 	then
 		while read ITEM
@@ -137,7 +137,7 @@ function check_instance_threads()
 			set_instance_data_max "${ITEM}" "maxThreads"
 			set_instance_data_obj "${ITEM}" "name="
 			set_instance_data_pct
-			
+
 			if [[ "$(is_service_status "critical")" -eq "1" ]]
 			then
 				set_exit "2"
@@ -147,7 +147,7 @@ function check_instance_threads()
 			else
 				set_exit "0"
 			fi
-			
+
 			set_exit_head "ThreadsBusy['$(get_instance_data_obj)']=$(get_instance_data_cur)/$(get_instance_data_max)"
 			set_exit_perf "ThreadsBusy['$(get_instance_data_obj)']=$(get_instance_data_cur);0;0;0;$(get_instance_data_max)"
 		done < <(list_items)
@@ -357,7 +357,7 @@ function is_service_status()
 	else
 		[[ "$(get_instance_data_cur)" -le "$(get_service_"${1}")" ]]
 	fi
-	
+
 	echo "${?}"
 }
 
@@ -394,7 +394,7 @@ function parse_args()
 				set_help
 				;;
 		esac
-		
+
 		shift
 	done
 }
@@ -406,7 +406,7 @@ function parse_data()
 
 function parse_xml()
 {
-	echo "cat //${1}" | xmllint --shell "${2}" | sed -r -n '/=/!d; s/^.*="([^"]+)"$/\1/p; q'
+	xmllint --xpath "${1}" "${2}" 2>/dev/null
 }
 
 function set_count()
@@ -506,12 +506,12 @@ function set_instance_auth()
 
 function set_instance_auth_pass()
 {
-	INSTANCE_AUTH_PASS="$(parse_xml "user[contains(@roles,'manager-jmx')]/@password" "$(get_instance_base)/conf/tomcat-users.xml")"
+	INSTANCE_AUTH_PASS="$(parse_xml "string(//*[local-name()='user'][contains(@roles,'manager-jmx')]/@password)" "$(get_instance_base)/conf/tomcat-users.xml")"
 }
 
 function set_instance_auth_user()
 {
-	INSTANCE_AUTH_USER="$(parse_xml "user[contains(@roles,'manager-jmx')]/@username" "$(get_instance_base)/conf/tomcat-users.xml")"
+	INSTANCE_AUTH_USER="$(parse_xml "string(//*[local-name()='user'][contains(@roles,'manager-jmx')]/@username)" "$(get_instance_base)/conf/tomcat-users.xml")"
 }
 
 function set_instance_base()
@@ -527,12 +527,12 @@ function set_instance_conn()
 
 function set_instance_conn_addr()
 {
-	INSTANCE_CONN_ADDR="$(parse_xml "Connector[@protocol='HTTP/1.1']/@address" "$(get_instance_base)/conf/server.xml")"
+	INSTANCE_CONN_ADDR="$(parse_xml "string(//*[local-name()='Connector'][@protocol='HTTP/1.1' or @protocol='org.apache.coyote.http11.Http11NioProtocol' or @protocol='org.apache.coyote.http11.Http11Nio2Protocol']/@address)" "$(get_instance_base)/conf/server.xml")"
 }
 
 function set_instance_conn_port()
 {
-	INSTANCE_CONN_PORT="$(parse_xml "Connector[@protocol='HTTP/1.1']/@port" "$(get_instance_base)/conf/server.xml")"
+	INSTANCE_CONN_PORT="$(parse_xml "string(//*[local-name()='Connector'][@protocol='HTTP/1.1' or @protocol='org.apache.coyote.http11.Http11NioProtocol' or @protocol='org.apache.coyote.http11.Http11Nio2Protocol']/@port)" "$(get_instance_base)/conf/server.xml")"
 }
 
 function set_instance_data()
@@ -599,12 +599,12 @@ then
 		if [[ "$(is_check_valid)" -eq "1" ]]
 		then
 			set_instance_proc
-			
+
 			if [[ "$(is_instance_alive)" -eq "1" ]]
 			then
 				set_instance_base
 				set_instance_auth
-				
+
 				if [[ "$(is_auth_valid)" -eq "1" ]]
 				then
 					set_instance_conn
@@ -621,7 +621,7 @@ then
 	else
 		set_exit "3" "error" "Invalid instance name provided (try '${BASH_SOURCE[0]} --help' for more information)"
 	fi
-	
+
 	get_exit
 else
 	get_help

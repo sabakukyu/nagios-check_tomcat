@@ -76,6 +76,10 @@ function check_instance_memory()
 
 		set_instance_data_cur "" "NonHeapMemoryUsage" "used="
 		set_instance_data_max "" "NonHeapMemoryUsage" "max="
+		if [[ "$(get_instance_data_max)" -eq "-1" ]]
+		then
+		  INSTANCE_DATA_MAX=9223372036854775807
+		fi
 		set_instance_data_pct
 
 		if [[ "$(is_service_status "critical")" -eq "1" ]]
@@ -97,7 +101,7 @@ function check_instance_memory()
 
 function check_instance_pools()
 {
-	set_instance_data "Catalina:type=DataSource,*" "maxA|numA"
+	set_instance_data "Catalina:type=DataSource,*" "maxA|maxT|numA"
 
 	if [[ "$(is_data_valid)" -eq "1" ]]
 	then
@@ -105,6 +109,10 @@ function check_instance_pools()
 		do
 			set_instance_data_cur "${ITEM}" "numActive"
 			set_instance_data_max "${ITEM}" "maxActive"
+			if [[ -z "$(get_instance_data_max)" ]]
+			then
+			  set_instance_data_max "${ITEM}" "maxTotal"
+			fi
 			set_instance_data_obj "${ITEM}" "name="
 			set_instance_data_pct
 
@@ -567,7 +575,7 @@ function set_instance_name()
 
 function set_instance_proc()
 {
-	INSTANCE_PROC="$(ps -C java -o cmd | grep "\/$(get_instance_name)\ ")"
+	INSTANCE_PROC="$(pgrep -af "java .*\/$(get_instance_name)\ ")"
 }
 
 function set_service_check()

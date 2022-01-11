@@ -508,7 +508,7 @@ function set_exit_stat()
 function set_help()
 {
 	HELP="$(echo -e \
-			"Usage: ${BASH_SOURCE[0]} [-h] [-v] -n instance_name -k service_check [-w service_warning] [-c service_critical]" \
+			"Usage: ${BASH_SOURCE[0]} [-h] [-v] -n instance_name -k service_check [-w service_warning] [-c service_critical] [-x service_max]" \
 			"\n" \
 			"\n  -c, --critical" \
 			"\n    Specifies the 'critical' level check. If the service check is 'apps' the value is treated as" \

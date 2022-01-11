@@ -11,7 +11,7 @@ The *check_tomcat* script has four different check types and each monitors the f
 
 Check types **memory** and **threads** return *performance data* in their output (others return *'null'*).
 
-This plugin has been tested with *Apache Tomcat* **6.x** and **7.x** (forward compatibility not guaranteed).
+This plugin has been tested with *Apache Tomcat* **6.x**, **7.x** and **8.x** (forward compatibility not guaranteed).
 
 ## Requirements
 
@@ -25,7 +25,7 @@ All other required commands (such as: *curl*, *grep*, *sed*, *...*) are very com
 
 ```sh
 $ ./check_tomcat --help
-Usage: ./check_tomcat [-h] [-v] -n instance_name -k service_check [-w service_warning] [-c service_critical]
+Usage: ./check_tomcat [-h] [-v] -n instance_name -k service_check [-w service_warning] [-c service_critical] [-x service_max]
 
   -c, --critical
     Specifies the 'critical' level check. If the service check is 'apps' the value is treated as
@@ -47,6 +47,9 @@ Usage: ./check_tomcat [-h] [-v] -n instance_name -k service_check [-w service_wa
     Specifies the 'warning' level check. If the service check is 'apps' the value is treated as
     a literal number, in any other case is treated as a percent. Default value is 75.
 
+  -x, --max
+    Specifies the 'max' level check. Can only be set service-wide, not per item.
+
 Example: ./check_tomcat -n tomcat -k memory -w 75 -c 90
 
 This example will report CRITICAL if the current JVM heap/nonheap usage exceeds 90% or WARNING
@@ -61,3 +64,4 @@ if the heap/nonheap usage exceeds 75%.
 ## 
 
 Joaquín José García Cañas (https://github.com/sabakukyu)
+Erich Mauerböck (https://github.com/enrice)

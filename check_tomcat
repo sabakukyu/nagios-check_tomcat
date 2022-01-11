@@ -3,6 +3,7 @@
 ################################################################################
 #
 # Author:      Joaquín José García Cañas
+# Author:      Erich Mauerböck
 # Description: Script to monitor Apache Tomcat through JMX Proxy Servlet
 #
 # History:
@@ -10,6 +11,7 @@
 #    02/03/2016 - v1.1.0 - Performance improvement
 #    09/03/2016 - v1.2.0 - Error handling
 #    23/03/2016 - v1.3.0 - Minor bugfixes and enhancements
+#    11/01/2022 - v2.0.0 - adaptions for later tomcats and more performance data
 #
 ################################################################################
 
@@ -25,14 +27,19 @@ function activate_debug()
 
 function check_instance_apps()
 {
-	set_instance_data "Catalina:type=Manager,*" "act"
+	set_instance_data "Catalina:type=Manager,*" "activeSessions|maxActiveSessions"
 
 	if [[ "$(is_data_valid)" -eq "1" ]]
 	then
 		while read ITEM
 		do
 			set_instance_data_cur "${ITEM}" "activeSessions"
-			set_instance_data_obj "${ITEM}" "path=|text="
+			set_instance_data_max "${ITEM}" "maxActiveSessions"
+			if [[ "$(get_instance_data_max)" -eq "-1" ]]
+			then
+				INSTANCE_DATA_MAX=$(get_service_max)
+			fi
+			set_instance_data_obj "${ITEM}" "path=|context="
 
 			if [[ "$(is_service_status "critical")" -eq "1" ]]
 			then
@@ -43,9 +50,10 @@ function check_instance_apps()
 			else
 				set_exit "0"
 			fi
-		done < <(list_items)
 
-		set_exit_head "$(get_count)"
+			set_exit_head "ActiveSessions['$(get_instance_data_obj)']=$(get_instance_data_cur)"
+			set_exit_perf "ActiveSessions['$(get_instance_data_obj)']=$(get_instance_data_cur);0;0;0;$(get_instance_data_max)"
+		done < <(list_items)
 	else
 		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
 	fi
@@ -59,6 +67,10 @@ function check_instance_memory()
 	then
 		set_instance_data_cur "" "HeapMemoryUsage" "used="
 		set_instance_data_max "" "HeapMemoryUsage" "max="
+		if [[ "$(get_instance_data_max)" -eq "-1" ]]
+		then
+			INSTANCE_DATA_MAX=$(get_service_max)
+		fi
 		set_instance_data_pct
 
 		if [[ "$(is_service_status "critical")" -eq "1" ]]
@@ -78,7 +90,7 @@ function check_instance_memory()
 		set_instance_data_max "" "NonHeapMemoryUsage" "max="
 		if [[ "$(get_instance_data_max)" -eq "-1" ]]
 		then
-		  INSTANCE_DATA_MAX=9223372036854775807
+			INSTANCE_DATA_MAX=$(get_service_max)
 		fi
 		set_instance_data_pct
 
@@ -111,9 +123,17 @@ function check_instance_pools()
 			set_instance_data_max "${ITEM}" "maxActive"
 			if [[ -z "$(get_instance_data_max)" ]]
 			then
-			  set_instance_data_max "${ITEM}" "maxTotal"
+				set_instance_data_max "${ITEM}" "maxTotal"
+				if [[ -z "$(get_instance_data_max)" ]]
+				then
+					INSTANCE_DATA_MAX=$(get_service_max)
+				fi
 			fi
-			set_instance_data_obj "${ITEM}" "name="
+			if [[ -z "$(get_instance_data_cur)" ]]
+			then
+				INSTANCE_DATA_CUR=0
+			fi
+			set_instance_data_obj "${ITEM}" "path=|context="
 			set_instance_data_pct
 
 			if [[ "$(is_service_status "critical")" -eq "1" ]]
@@ -125,9 +145,10 @@ function check_instance_pools()
 			else
 				set_exit "0"
 			fi
+			set_exit_head "NumActive['$(get_instance_data_obj)']=$(get_instance_data_cur)"
+			set_exit_perf "NumActive['$(get_instance_data_obj)']=$(get_instance_data_cur);0;0;0;$(get_instance_data_max)"
 		done < <(list_items)
 
-		set_exit_head "$(get_count)"
 	else
 		set_exit "2" "error" "No data available due to previous error (check '/manager' for more information)"
 	fi
@@ -327,6 +348,11 @@ function get_service_warning()
 	echo "${SERVICE_WARNING:-75}"
 }
 
+function get_service_max()
+{
+	echo "${SERVICE_MAX:-100}"
+}
+
 function is_auth_valid()
 {
 	[[ "$(get_instance_auth)" =~ ^[^:]+:[^:]+$ ]] && echo "1" || echo "0"
@@ -385,6 +411,10 @@ function parse_args()
 				;;
 			"-k"|"--check")
 				set_service_check "${2}"
+				shift
+				;;
+			"-x"|"--max")
+				set_service_max "${2}"
 				shift
 				;;
 			"-w"|"--warning")
@@ -500,6 +530,9 @@ function set_help()
 			"\n    Specifies the 'warning' level check. If the service check is 'apps' the value is treated as" \
 			"\n    a literal number, in any other case is treated as a percent. Default value is 75." \
 			"\n" \
+			"\n  -x, --max" \
+			"\n    Specifies the 'max' level check. Can only be set service-wide, not per item." \
+			"\n" \
 			"\nExample: ${BASH_SOURCE[0]} -n tomcat -k memory -w 75 -c 90" \
 			"\n" \
 			"\nThis example will report CRITICAL if the current JVM heap/nonheap usage exceeds 90% or WARNING" \
@@ -591,6 +624,11 @@ function set_service_critical()
 function set_service_warning()
 {
 	SERVICE_WARNING="${1}"
+}
+
+function set_service_max()
+{
+	SERVICE_MAX="${1}"
 }
 
 
